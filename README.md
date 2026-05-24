@@ -40,3 +40,5 @@ python -m src.rtt.cli input_mix.mp3 --output output_tracks --min-track 45 --max-
 
 - Input decoding for MP3 depends on your local audio backend. If MP3 fails to decode, install FFmpeg and retry.
 - Output format is WAV for portability and robust writing support.
+- Preferred input naming format is: `ArtistName - TrackName [record ref] - side - 33/45rpm`.
+- The trailing `- 33/45rpm` segment is optional and only indicates a non-standard recording/playback speed.

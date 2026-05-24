@@ -2,3 +2,6 @@ librosa
 numpy
 scipy
 soundfile
+httpx
+pydantic
+pydantic-settings
