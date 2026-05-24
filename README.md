@@ -11,8 +11,9 @@ The app combines multiple rules:
 
 ## Features
 
-- Upload MP3 and tune split behavior in a local web app
-- Preview timeline and segmentation diagnostics
+- Native desktop GUI (Tkinter) for local usage
+- Tune split behavior with interactive controls
+- Preview detected track timeline before exporting
 - Export all detected tracks as WAV files in a ZIP archive
 - CLI mode for scripting
 
@@ -23,11 +24,11 @@ The app combines multiple rules:
 
 	pip install -r requirements.txt
 
-3. Run web app:
+3. Run desktop app:
 
-	streamlit run app.py
+	python app.py
 
-4. Open the local URL shown by Streamlit.
+4. Pick your input file and output folder, then click "Split Into Tracks".
 
 ## CLI Usage
 

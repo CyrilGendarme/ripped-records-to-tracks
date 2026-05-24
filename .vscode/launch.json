@@ -2,26 +2,18 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Normal Run (Streamlit)",
+      "name": "Normal Run (Desktop App)",
       "type": "python",
       "request": "launch",
-      "module": "streamlit",
-      "args": [
-        "run",
-        "${workspaceFolder}/app.py"
-      ],
+      "program": "${workspaceFolder}/app.py",
       "console": "integratedTerminal",
       "justMyCode": true
     },
     {
-      "name": "Debug Run (Streamlit)",
+      "name": "Debug Run (Desktop App)",
       "type": "python",
       "request": "launch",
-      "module": "streamlit",
-      "args": [
-        "run",
-        "${workspaceFolder}/app.py"
-      ],
+      "program": "${workspaceFolder}/app.py",
       "console": "integratedTerminal",
       "justMyCode": false,
       "env": {

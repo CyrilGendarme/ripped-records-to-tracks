@@ -1,139 +1,204 @@
 from __future__ import annotations
 
-import tempfile
+import os
+import threading
+import tkinter as tk
 from pathlib import Path
-
-import pandas as pd
-import streamlit as st
+from tkinter import filedialog, messagebox, ttk
 
 from src.rtt.pipeline import split_audio_file
 from src.rtt.segmentation import SegmentationConfig
 
 
-st.set_page_config(page_title="Ripped Records -> Tracks", page_icon="vinyl", layout="wide")
+class DesktopApp:
+    def __init__(self, root: tk.Tk) -> None:
+        self.root = root
+        self.root.title("Ripped Records to Tracks")
+        self.root.geometry("1080x760")
+        self.root.configure(bg="#f6f2e9")
 
-st.markdown(
-    """
-    <style>
-      @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
-      :root {
-        --bg-1: #f7efe5;
-        --bg-2: #f1d6a8;
-        --accent: #14532d;
-        --accent-2: #9a3412;
-        --text: #1f2937;
-      }
-      .stApp {
-        background: radial-gradient(circle at 20% 10%, var(--bg-2), transparent 45%),
-                    radial-gradient(circle at 80% 90%, #dbeafe, transparent 45%),
-                    linear-gradient(130deg, var(--bg-1), #fff7ed);
-      }
-      html, body, [class*="css"] {
-        font-family: 'Space Grotesk', sans-serif;
-        color: var(--text);
-      }
-      .metric-box {
-        border: 1px solid rgba(20, 83, 45, 0.2);
-        background: rgba(255,255,255,0.7);
-        padding: 0.85rem;
-        border-radius: 0.8rem;
-        backdrop-filter: blur(5px);
-      }
-      .smallmono {
-        font-family: 'IBM Plex Mono', monospace;
-      }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+        self.input_path = tk.StringVar()
+        self.output_dir = tk.StringVar(value=str(Path.cwd() / "output_tracks"))
+        self.status_var = tk.StringVar(value="Select an audio file to start.")
 
-st.title("Ripped Records -> Tracks")
-st.caption("Upload one long MP3 and split it with layered heuristics: silence, BPM shifts, tonality jumps, and spectral novelty.")
+        self.sensitivity = tk.DoubleVar(value=0.55)
+        self.min_track = tk.DoubleVar(value=40.0)
+        self.max_track = tk.DoubleVar(value=600.0)
+        self.silence_db = tk.DoubleVar(value=-36.0)
+        self.silence_min = tk.DoubleVar(value=1.2)
+        self.w_silence = tk.DoubleVar(value=0.35)
+        self.w_bpm = tk.DoubleVar(value=0.2)
+        self.w_tonal = tk.DoubleVar(value=0.2)
+        self.w_spec = tk.DoubleVar(value=0.25)
 
-with st.sidebar:
-    st.header("Segmentation Rules")
-    sensitivity = st.slider("Global sensitivity", min_value=0.0, max_value=1.0, value=0.55, step=0.01)
-    min_track = st.slider("Min track length (s)", min_value=10.0, max_value=240.0, value=40.0, step=1.0)
-    max_track = st.slider("Max track length (s)", min_value=60.0, max_value=1200.0, value=600.0, step=5.0)
-    silence_db = st.slider("Silence threshold (dB)", min_value=-70.0, max_value=-10.0, value=-36.0, step=1.0)
-    silence_min = st.slider("Min silence window (s)", min_value=0.2, max_value=4.0, value=1.2, step=0.1)
+        self._build_styles()
+        self._build_layout()
 
-    st.subheader("Rule Weights")
-    w_silence = st.slider("Silence", 0.0, 1.0, 0.35, 0.01)
-    w_bpm = st.slider("BPM Change", 0.0, 1.0, 0.20, 0.01)
-    w_tonal = st.slider("Tonality Change", 0.0, 1.0, 0.20, 0.01)
-    w_spec = st.slider("Spectral Novelty", 0.0, 1.0, 0.25, 0.01)
+    def _build_styles(self) -> None:
+        style = ttk.Style()
+        style.theme_use("clam")
+        style.configure("Card.TLabelframe", background="#fffdf7", borderwidth=1)
+        style.configure("Card.TLabelframe.Label", background="#fffdf7", foreground="#1f2937", font=("Segoe UI", 10, "bold"))
+        style.configure("Main.TButton", font=("Segoe UI", 10, "bold"), padding=8)
+        style.configure("TLabel", background="#f6f2e9", foreground="#111827", font=("Segoe UI", 10))
 
-uploaded = st.file_uploader("Drop your .mp3 here", type=["mp3", "wav", "flac", "ogg"])
+    def _build_layout(self) -> None:
+        wrapper = ttk.Frame(self.root, padding=14)
+        wrapper.pack(fill="both", expand=True)
 
-if uploaded is not None:
-    with tempfile.TemporaryDirectory(prefix="rtt_") as tmp:
-        in_path = Path(tmp) / uploaded.name
-        in_path.write_bytes(uploaded.getbuffer())
-
-        output_dir = Path(tmp) / "tracks"
-        cfg = SegmentationConfig(
-            min_track_len_s=min_track,
-            max_track_len_s=max_track,
-            silence_db_threshold=silence_db,
-            silence_min_len_s=silence_min,
-            sensitivity=sensitivity,
-            weight_silence=w_silence,
-            weight_bpm_change=w_bpm,
-            weight_tonality_change=w_tonal,
-            weight_spectral_novelty=w_spec,
+        title = ttk.Label(
+            wrapper,
+            text="Ripped Records to Tracks - Desktop",
+            font=("Segoe UI", 17, "bold"),
         )
+        title.pack(anchor="w", pady=(0, 8))
 
-        with st.spinner("Analyzing recording and detecting boundaries..."):
-            result = split_audio_file(file_path=in_path, output_dir=output_dir, cfg=cfg)
+        picker = ttk.LabelFrame(wrapper, text="Audio & Output", style="Card.TLabelframe", padding=12)
+        picker.pack(fill="x", pady=(0, 10))
 
-        boundaries = result.segmentation.boundaries_s
-        tracks = []
-        for idx in range(len(boundaries) - 1):
-            tracks.append(
-                {
-                    "track": idx + 1,
-                    "start_s": boundaries[idx],
-                    "end_s": boundaries[idx + 1],
-                    "duration_s": round(boundaries[idx + 1] - boundaries[idx], 2),
-                }
+        self._path_row(picker, "Input audio", self.input_path, self._pick_input, "Choose File", 0)
+        self._path_row(picker, "Output folder", self.output_dir, self._pick_output, "Choose Folder", 1)
+
+        body = ttk.Frame(wrapper)
+        body.pack(fill="both", expand=True)
+
+        controls = ttk.LabelFrame(body, text="Segmentation Rules", style="Card.TLabelframe", padding=12)
+        controls.pack(side="left", fill="y", padx=(0, 10))
+
+        self._slider(controls, "Global sensitivity", self.sensitivity, 0.0, 1.0, 0)
+        self._slider(controls, "Min track length (s)", self.min_track, 10.0, 240.0, 1)
+        self._slider(controls, "Max track length (s)", self.max_track, 60.0, 1200.0, 2)
+        self._slider(controls, "Silence threshold (dB)", self.silence_db, -70.0, -10.0, 3)
+        self._slider(controls, "Min silence window (s)", self.silence_min, 0.2, 4.0, 4)
+
+        ttk.Separator(controls).grid(row=5, column=0, columnspan=2, sticky="ew", pady=8)
+        ttk.Label(controls, text="Rule weights", font=("Segoe UI", 10, "bold")).grid(row=6, column=0, columnspan=2, sticky="w", pady=(2, 6))
+
+        self._slider(controls, "Silence", self.w_silence, 0.0, 1.0, 7)
+        self._slider(controls, "BPM change", self.w_bpm, 0.0, 1.0, 8)
+        self._slider(controls, "Tonality change", self.w_tonal, 0.0, 1.0, 9)
+        self._slider(controls, "Spectral novelty", self.w_spec, 0.0, 1.0, 10)
+
+        run_btn = ttk.Button(controls, text="Split Into Tracks", style="Main.TButton", command=self._start_split)
+        run_btn.grid(row=11, column=0, columnspan=2, sticky="ew", pady=(14, 4))
+
+        self.open_btn = ttk.Button(controls, text="Open Output Folder", command=self._open_output_dir)
+        self.open_btn.grid(row=12, column=0, columnspan=2, sticky="ew")
+
+        result = ttk.LabelFrame(body, text="Detected Timeline", style="Card.TLabelframe", padding=10)
+        result.pack(side="left", fill="both", expand=True)
+
+        columns = ("track", "start", "end", "duration")
+        self.tree = ttk.Treeview(result, columns=columns, show="headings", height=20)
+        self.tree.heading("track", text="#")
+        self.tree.heading("start", text="Start (s)")
+        self.tree.heading("end", text="End (s)")
+        self.tree.heading("duration", text="Duration (s)")
+
+        self.tree.column("track", width=60, anchor="center")
+        self.tree.column("start", width=110, anchor="e")
+        self.tree.column("end", width=110, anchor="e")
+        self.tree.column("duration", width=120, anchor="e")
+        self.tree.pack(fill="both", expand=True)
+
+        status = ttk.Label(wrapper, textvariable=self.status_var, font=("Consolas", 10))
+        status.pack(anchor="w", pady=(10, 0))
+
+    def _path_row(self, parent: ttk.LabelFrame, label: str, var: tk.StringVar, callback, button_text: str, row: int) -> None:
+        ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", padx=(0, 8), pady=4)
+        entry = ttk.Entry(parent, textvariable=var, width=92)
+        entry.grid(row=row, column=1, sticky="ew", pady=4)
+        btn = ttk.Button(parent, text=button_text, command=callback)
+        btn.grid(row=row, column=2, padx=(8, 0), pady=4)
+        parent.columnconfigure(1, weight=1)
+
+    def _slider(self, parent: ttk.LabelFrame, label: str, var: tk.DoubleVar, frm: float, to: float, row: int) -> None:
+        ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w")
+        scale = ttk.Scale(parent, variable=var, from_=frm, to=to)
+        scale.grid(row=row, column=1, sticky="ew", padx=(10, 0), pady=4)
+        parent.columnconfigure(1, weight=1)
+
+    def _pick_input(self) -> None:
+        selected = filedialog.askopenfilename(
+            title="Select audio file",
+            filetypes=[("Audio", "*.mp3 *.wav *.flac *.ogg *.m4a"), ("All files", "*.*")],
+        )
+        if selected:
+            self.input_path.set(selected)
+
+    def _pick_output(self) -> None:
+        selected = filedialog.askdirectory(title="Select output folder")
+        if selected:
+            self.output_dir.set(selected)
+
+    def _open_output_dir(self) -> None:
+        path = Path(self.output_dir.get())
+        if path.exists():
+            os.startfile(path)
+        else:
+            messagebox.showwarning("Missing folder", "Output folder does not exist yet.")
+
+    def _start_split(self) -> None:
+        input_file = Path(self.input_path.get())
+        output_folder = Path(self.output_dir.get())
+
+        if not input_file.exists():
+            messagebox.showerror("Input missing", "Please choose a valid input audio file.")
+            return
+
+        self.status_var.set("Analyzing audio... this can take a while for long recordings.")
+
+        worker = threading.Thread(target=self._run_split, args=(input_file, output_folder), daemon=True)
+        worker.start()
+
+    def _run_split(self, input_file: Path, output_folder: Path) -> None:
+        try:
+            cfg = SegmentationConfig(
+                min_track_len_s=float(self.min_track.get()),
+                max_track_len_s=float(self.max_track.get()),
+                silence_db_threshold=float(self.silence_db.get()),
+                silence_min_len_s=float(self.silence_min.get()),
+                sensitivity=float(self.sensitivity.get()),
+                weight_silence=float(self.w_silence.get()),
+                weight_bpm_change=float(self.w_bpm.get()),
+                weight_tonality_change=float(self.w_tonal.get()),
+                weight_spectral_novelty=float(self.w_spec.get()),
             )
 
-        c1, c2, c3 = st.columns(3)
-        c1.markdown(f"<div class='metric-box'><b>Detected tracks</b><br><span class='smallmono'>{len(tracks)}</span></div>", unsafe_allow_html=True)
-        c2.markdown(
-            f"<div class='metric-box'><b>Boundaries</b><br><span class='smallmono'>{len(boundaries)}</span></div>",
-            unsafe_allow_html=True,
-        )
-        c3.markdown(
-            f"<div class='metric-box'><b>Total duration</b><br><span class='smallmono'>{round(result.segmentation.duration_s, 2)} s</span></div>",
-            unsafe_allow_html=True,
-        )
+            result = split_audio_file(file_path=input_file, output_dir=output_folder, cfg=cfg)
+            self.root.after(0, lambda: self._render_result(result.segmentation.boundaries_s, result.zip_path))
+        except Exception as exc:  # noqa: BLE001
+            self.root.after(0, lambda: messagebox.showerror("Split failed", str(exc)))
+            self.root.after(0, lambda: self.status_var.set("Split failed. Adjust parameters and retry."))
 
-        st.subheader("Track Timeline")
-        st.dataframe(pd.DataFrame(tracks), use_container_width=True)
+    def _render_result(self, boundaries: list[float], zip_path: Path) -> None:
+        for item in self.tree.get_children():
+            self.tree.delete(item)
 
-        st.subheader("Diagnostics")
-        diag = result.segmentation.diagnostics
-        chart_df = pd.DataFrame(
-            {
-                "time_s": diag["time_s"],
-                "combo_score": diag["combo_score"],
-                "bpm_score": diag["bpm_score"],
-                "tonality_score": diag["tonality_score"],
-                "novelty_score": diag["novelty_score"],
-                "silence_score": diag["silence_score"],
-            }
-        ).set_index("time_s")
-        st.line_chart(chart_df)
+        for idx in range(len(boundaries) - 1):
+            start_s = boundaries[idx]
+            end_s = boundaries[idx + 1]
+            self.tree.insert(
+                "",
+                "end",
+                values=(
+                    idx + 1,
+                    f"{start_s:.2f}",
+                    f"{end_s:.2f}",
+                    f"{(end_s - start_s):.2f}",
+                ),
+            )
 
-        zip_bytes = result.zip_path.read_bytes()
-        st.download_button(
-            label="Download split tracks as ZIP",
-            data=zip_bytes,
-            file_name=result.zip_path.name,
-            mime="application/zip",
-            use_container_width=True,
-        )
-else:
-    st.info("Upload a file to begin segmentation.")
+        self.status_var.set(f"Done. Created {len(boundaries) - 1} tracks. Zip bundle: {zip_path}")
+        messagebox.showinfo("Split complete", f"Track export completed.\n\nZIP: {zip_path}")
+
+
+def main() -> None:
+    root = tk.Tk()
+    app = DesktopApp(root)
+    root.minsize(980, 680)
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()
