@@ -7,7 +7,7 @@ from typing import Iterable, List
 import zipfile
 
 import numpy as np
-import soundfile as sf
+from pydub import AudioSegment
 
 
 _INVALID_FILENAME_CHARS_RE = re.compile(r"[<>:\"/\\|?*]")
@@ -19,6 +19,12 @@ class TrackExportMetadata:
     title: str | None = None
     album: str | None = None
     record_ref: str | None = None
+
+
+@dataclass
+class AudioExportSettings:
+    format: str = "mp3"
+    bitrate: str | None = None
 
 
 def _sanitize_filename_piece(value: str) -> str:
@@ -40,7 +46,7 @@ def _unique_path(path: Path) -> Path:
 
 
 def _safe_track_name(base_name: str, index: int, _start_s: float, _end_s: float) -> str:
-    return f"{base_name}_track_{index:02d}.wav"
+    return f"{base_name}_track_{index:02d}.mp3"
 
 
 def _name_from_metadata(meta: TrackExportMetadata | None, fallback_name: str) -> str:
@@ -48,39 +54,84 @@ def _name_from_metadata(meta: TrackExportMetadata | None, fallback_name: str) ->
         artist = _sanitize_filename_piece(meta.artist)
         title = _sanitize_filename_piece(meta.title)
         if artist and title:
-            return f"{artist} - {title}.wav"
+            return f"{artist} - {title}.mp3"
     return fallback_name
 
 
-def _write_wav_metadata(path: Path, meta: TrackExportMetadata | None) -> None:
+def _write_audio_metadata(path: Path, meta: TrackExportMetadata | None) -> None:
     if not meta:
         return
     try:
         from mutagen.id3 import TALB, TIT2, TPE1, TXXX
+        from mutagen.mp3 import MP3
         from mutagen.wave import WAVE
     except Exception:
         return
 
     try:
-        wav = WAVE(str(path))
-        if wav.tags is None:
-            wav.add_tags()
+        if path.suffix.lower() == ".mp3":
+            audio_file = MP3(str(path))
+        else:
+            audio_file = WAVE(str(path))
+
+        if audio_file.tags is None:
+            audio_file.add_tags()
 
         if meta.title:
-            wav.tags["TIT2"] = TIT2(encoding=3, text=[meta.title])
+            audio_file.tags["TIT2"] = TIT2(encoding=3, text=[meta.title])
         if meta.artist:
-            wav.tags["TPE1"] = TPE1(encoding=3, text=[meta.artist])
+            audio_file.tags["TPE1"] = TPE1(encoding=3, text=[meta.artist])
         if meta.album:
-            wav.tags["TALB"] = TALB(encoding=3, text=[meta.album])
+            audio_file.tags["TALB"] = TALB(encoding=3, text=[meta.album])
         if meta.record_ref:
-            wav.tags["TXXX:record_ref"] = TXXX(
+            audio_file.tags["TXXX:record_ref"] = TXXX(
                 encoding=3,
                 desc="record_ref",
                 text=[meta.record_ref],
             )
-        wav.save()
+        audio_file.save()
     except Exception:
         return
+
+
+def infer_export_settings(input_file: Path) -> AudioExportSettings:
+    settings = AudioExportSettings(format="mp3", bitrate=None)
+    if input_file.suffix.lower() != ".mp3":
+        return settings
+
+    try:
+        from mutagen.mp3 import MP3
+    except Exception:
+        return settings
+
+    try:
+        info = MP3(str(input_file)).info
+        bitrate = getattr(info, "bitrate", None)
+        if bitrate and bitrate > 0:
+            kbps = max(32, int(round(float(bitrate) / 1000.0)))
+            settings.bitrate = f"{kbps}k"
+    except Exception:
+        return settings
+
+    return settings
+
+
+def _chunk_to_audio_segment(chunk: np.ndarray, sr: int) -> AudioSegment:
+    arr = np.asarray(chunk, dtype=np.float32)
+    if arr.ndim == 1:
+        channels = 1
+        pcm = np.clip(arr, -1.0, 1.0)
+    else:
+        channels = int(arr.shape[1])
+        pcm = np.clip(arr, -1.0, 1.0)
+
+    pcm16 = (pcm * 32767.0).astype(np.int16)
+    return AudioSegment(
+        data=pcm16.tobytes(),
+        sample_width=2,
+        frame_rate=int(sr),
+        channels=channels,
+    )
 
 
 def export_tracks_to_wav(
@@ -90,7 +141,9 @@ def export_tracks_to_wav(
     output_dir: Path,
     base_name: str,
     track_metadata: List[TrackExportMetadata] | None = None,
+    export_settings: AudioExportSettings | None = None,
 ) -> List[Path]:
+    settings = export_settings or AudioExportSettings()
     output_dir.mkdir(parents=True, exist_ok=True)
     b = sorted(set(float(x) for x in boundaries_s))
     written: List[Path] = []
@@ -110,8 +163,14 @@ def export_tracks_to_wav(
         meta = track_metadata[idx] if track_metadata and idx < len(track_metadata) else None
         out_name = _name_from_metadata(meta, fallback_name)
         out_path = _unique_path(output_dir / out_name)
-        sf.write(out_path, chunk, sr)
-        _write_wav_metadata(out_path, meta)
+
+        segment = _chunk_to_audio_segment(chunk, sr)
+        export_kwargs = {"format": settings.format}
+        if settings.bitrate:
+            export_kwargs["bitrate"] = settings.bitrate
+        segment.export(str(out_path), **export_kwargs)
+
+        _write_audio_metadata(out_path, meta)
         written.append(out_path)
 
     return written

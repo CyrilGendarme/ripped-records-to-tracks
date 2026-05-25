@@ -4,5 +4,6 @@ scipy
 soundfile
 httpx
 mutagen
+pydub
 pydantic
 pydantic-settings

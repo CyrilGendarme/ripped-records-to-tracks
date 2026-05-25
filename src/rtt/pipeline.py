@@ -8,7 +8,12 @@ from typing import List, Optional, Tuple
 import librosa
 import numpy as np
 
-from .exporter import TrackExportMetadata, build_zip, export_tracks_to_wav
+from .exporter import (
+    TrackExportMetadata,
+    build_zip,
+    export_tracks_to_wav,
+    infer_export_settings,
+)
 from .naming import build_export_base_name
 from .naming import parse_recording_name
 from .segmentation import (
@@ -321,7 +326,7 @@ def _detect_boundaries_with_target_count(
     return best_seg
 
 
-def load_audio(file_path: Path, mono: bool = True) -> tuple[np.ndarray, int]:
+def load_audio(file_path: Path, mono: bool = False) -> tuple[np.ndarray, int]:
     y, sr = librosa.load(path=str(file_path), sr=None, mono=mono)
     return y, sr
 
@@ -346,6 +351,7 @@ def split_audio_file(
 
     base_name = build_export_base_name(file_path.stem)
     track_metadata = _build_track_metadata(seg=seg, export_info=export_info)
+    export_settings = infer_export_settings(file_path)
     files = export_tracks_to_wav(
         audio=audio,
         sr=sr,
@@ -353,6 +359,7 @@ def split_audio_file(
         output_dir=output_dir,
         base_name=base_name,
         track_metadata=track_metadata,
+        export_settings=export_settings,
     )
     zip_path = build_zip(files, output_dir / f"{base_name}_tracks.zip")
     return SplitOutput(
