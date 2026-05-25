@@ -21,9 +21,12 @@ class SegmentationConfig:
     weight_bpm_change: float = 0.6
     weight_tonality_change: float = 0.2
     weight_spectral_novelty: float = 0.25
-    music_low_hz: float = 120.0
-    music_high_hz: float = 5000.0
+    # music_low_hz: float = 60.0
+    # music_high_hz: float = 2500.0
+    music_low_hz: float = 200.0
+    music_high_hz: float = 400.0
     trim_silence_db_threshold: float = -52.0
+    input_trim_min_active_s: float = 0.10
 
 
 @dataclass

@@ -25,6 +25,7 @@ class SplitOutput:
     segmentation: SegmentationResult
     files: List[Path]
     discogs_tracks: List[str] = field(default_factory=list)
+    track_metadata: List[TrackExportMetadata] = field(default_factory=list)
 
 
 @dataclass
@@ -256,6 +257,7 @@ def _trim_input_edge_silence(
     audio: np.ndarray,
     sr: int,
     threshold_db: float,
+    min_active_run_s: float,
     frame_ms: float = 10.0,
 ) -> tuple[np.ndarray, float, float]:
     """Trim only global start/end silence from input before any other processing.
@@ -286,8 +288,7 @@ def _trim_input_edge_silence(
     active = rms_db >= threshold_db
 
     frame_s = frame_ms / 1000.0
-    min_active_run_s = 0.10
-    min_active_run_frames = max(1, int(round(min_active_run_s / frame_s)))
+    min_active_run_frames = max(1, int(round(max(0.01, min_active_run_s) / frame_s)))
 
     runs: list[tuple[int, int]] = []
     start = None
@@ -347,12 +348,14 @@ def split_audio_file(
         audio=audio,
         sr=sr,
         threshold_db=cfg.trim_silence_db_threshold,
+        min_active_run_s=cfg.input_trim_min_active_s,
     )
     if start_trim_s > 0.0 or end_trim_s > 0.0:
         print(
             "Input edge trim applied "
             f"(start={start_trim_s:.2f}s, end={end_trim_s:.2f}s, "
-            f"threshold={cfg.trim_silence_db_threshold:.1f}dB)."
+            f"threshold={cfg.trim_silence_db_threshold:.1f}dB, "
+            f"min_active={cfg.input_trim_min_active_s:.2f}s)."
         )
 
     duration_s = float(audio.shape[0]) / float(sr)
@@ -391,4 +394,5 @@ def split_audio_file(
         segmentation=seg,
         files=files,
         discogs_tracks=export_info.display_tracks,
+        track_metadata=track_metadata,
     )
