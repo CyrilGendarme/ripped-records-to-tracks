@@ -17,6 +17,7 @@ from .naming import parse_recording_name
 from .segmentation import (
     SegmentationConfig,
     SegmentationResult,
+    _bandpass_music_only,
     detect_boundaries_by_silence_target,
 )
 
@@ -259,6 +260,8 @@ def _trim_input_edge_silence(
     threshold_db: float,
     min_active_run_s: float,
     frame_ms: float = 10.0,
+    music_low_hz: float = 200.0,
+    music_high_hz: float = 400.0,
 ) -> tuple[np.ndarray, float, float]:
     """Trim only global start/end silence from input before any other processing.
 
@@ -277,29 +280,84 @@ def _trim_input_edge_silence(
         )
         n_samples = int(arr.shape[0])
 
+    # Focus edge detection on the narrow band used elsewhere for vinyl-aware
+    # silence analysis so clicks and broad-band surface noise matter less.
+    mono_music = _bandpass_music_only(
+        y=np.asarray(mono, dtype=np.float32),
+        sr=sr,
+        low_hz=music_low_hz,
+        high_hz=music_high_hz,
+    )
+
     frame_len = max(1, int(round(sr * frame_ms / 1000.0)))
-    usable = (len(mono) // frame_len) * frame_len
+    usable = (len(mono_music) // frame_len) * frame_len
     if usable <= 0:
         return arr, 0.0, 0.0
 
-    framed = mono[:usable].reshape(-1, frame_len)
+    framed = mono_music[:usable].reshape(-1, frame_len)
     rms = np.sqrt(np.mean(np.square(framed), axis=1, dtype=np.float64))
     rms_db = 20.0 * np.log10(np.maximum(rms, 1e-9))
-    active = rms_db >= threshold_db
 
+    # Smooth over a longer window than a click/pop so we only react to sustained
+    # music energy. This follows the same spirit as leading-silence detectors
+    # that scan in chunks rather than reacting to single frames.
     frame_s = frame_ms / 1000.0
-    min_active_run_frames = max(1, int(round(max(0.01, min_active_run_s) / frame_s)))
+    smooth_frames = max(1, int(round(0.18 / frame_s)))
+    smooth_kernel = np.ones(smooth_frames, dtype=np.float64) / float(smooth_frames)
+    rms_smooth = np.convolve(rms, smooth_kernel, mode="same")
+    rms_db_smooth = 20.0 * np.log10(np.maximum(rms_smooth, 1e-9))
+
+    # Use a stricter effective threshold near the file edges by comparing both
+    # to the absolute threshold and to the measured noise floor.
+    noise_floor_db = float(np.percentile(rms_db_smooth, 20.0))
+    peak_db = float(np.max(rms_db_smooth))
+    dynamic_floor_db = noise_floor_db + 8.0
+    relative_floor_db = peak_db - 42.0
+    effective_threshold_db = max(threshold_db, dynamic_floor_db, relative_floor_db)
+    active = rms_db_smooth >= effective_threshold_db
+
+    min_active_run_frames = max(1, int(round(max(0.08, min_active_run_s) / frame_s)))
+
+    # Require dense activity over a window, not just contiguous spikes. This is
+    # more resilient to recurring vinyl crackle during long lead-in/out grooves.
+    occupancy_frames = max(min_active_run_frames, int(round(0.25 / frame_s)))
+    occupancy_kernel = np.ones(occupancy_frames, dtype=np.float64) / float(
+        occupancy_frames
+    )
+    occupancy = np.convolve(active.astype(np.float64), occupancy_kernel, mode="same")
+    sustained_active = occupancy >= 0.65
+
+    # Allow very short gaps inside a musical section so soft attacks are not
+    # split apart by a few quiet frames.
+    bridge_gap_frames = max(1, int(round(0.08 / frame_s)))
+    if bridge_gap_frames > 1 and len(sustained_active) > 2:
+        bridged = sustained_active.copy()
+        i = 0
+        while i < len(bridged):
+            if not bridged[i]:
+                gap_start = i
+                while i < len(bridged) and not bridged[i]:
+                    i += 1
+                gap_end = i - 1
+                gap_len = gap_end - gap_start + 1
+                left_on = gap_start > 0 and bridged[gap_start - 1]
+                right_on = i < len(bridged) and bridged[i]
+                if left_on and right_on and gap_len <= bridge_gap_frames:
+                    bridged[gap_start : gap_end + 1] = True
+            else:
+                i += 1
+        sustained_active = bridged
 
     runs: list[tuple[int, int]] = []
     start = None
-    for i, is_active in enumerate(active):
+    for i, is_active in enumerate(sustained_active):
         if is_active and start is None:
             start = i
         elif not is_active and start is not None:
             runs.append((start, i - 1))
             start = None
     if start is not None:
-        runs.append((start, len(active) - 1))
+        runs.append((start, len(sustained_active) - 1))
 
     long_runs = [run for run in runs if (run[1] - run[0] + 1) >= min_active_run_frames]
     if not long_runs:
@@ -308,9 +366,9 @@ def _trim_input_edge_silence(
     first, _ = long_runs[0]
     _, last = long_runs[-1]
 
-    pad_frames = max(1, int(round(0.03 / frame_s)))
+    pad_frames = max(1, int(round(0.06 / frame_s)))
     first = max(0, first - pad_frames)
-    last = min(len(active) - 1, last + pad_frames)
+    last = min(len(sustained_active) - 1, last + pad_frames)
 
     start_i = max(0, first * frame_len)
     end_i = min(n_samples, (last + 1) * frame_len)
@@ -349,6 +407,8 @@ def split_audio_file(
         sr=sr,
         threshold_db=cfg.trim_silence_db_threshold,
         min_active_run_s=cfg.input_trim_min_active_s,
+        music_low_hz=cfg.music_low_hz,
+        music_high_hz=cfg.music_high_hz,
     )
     if start_trim_s > 0.0 or end_trim_s > 0.0:
         print(
