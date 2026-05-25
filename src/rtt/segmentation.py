@@ -5,8 +5,7 @@ from typing import Dict, List, Tuple
 
 import librosa
 import numpy as np
-from scipy.signal import find_peaks
-
+from scipy.signal import butter, find_peaks, sosfiltfilt
 
 @dataclass
 class SegmentationConfig:
@@ -22,6 +21,8 @@ class SegmentationConfig:
     weight_bpm_change: float = 0.6
     weight_tonality_change: float = 0.2
     weight_spectral_novelty: float = 0.25
+    music_low_hz: float = 120.0
+    music_high_hz: float = 5000.0
 
 
 @dataclass
@@ -113,6 +114,165 @@ def _silence_candidates(
     if candidates_idx:
         score[candidates_idx] = 1.0
     return score, candidates_idx
+
+
+def _to_mono(audio: np.ndarray) -> np.ndarray:
+    if audio.ndim > 1:
+        return np.mean(audio, axis=1)
+    return np.asarray(audio)
+
+
+def _bandpass_music_only(
+    y: np.ndarray, sr: int, low_hz: float, high_hz: float
+) -> np.ndarray:
+    nyquist = max(1.0, sr / 2.0)
+    low = max(20.0, min(low_hz, nyquist * 0.9))
+    high = max(low + 20.0, min(high_hz, nyquist * 0.98))
+
+    if high <= low:
+        return y
+
+    try:
+        sos = butter(4, [low / nyquist, high / nyquist], btype="bandpass", output="sos")
+        return sosfiltfilt(sos, y)
+    except Exception:
+        # Filtering should improve robustness, but must never block splitting.
+        return y
+
+
+def _silence_windows_from_rms(
+    rms_db: np.ndarray,
+    times: np.ndarray,
+    threshold_db: float,
+    min_silence_len_s: float,
+) -> List[Tuple[int, int, int, float, float]]:
+    low = rms_db < threshold_db
+    windows: List[Tuple[int, int, int, float, float]] = []
+    n = len(low)
+    i = 0
+    while i < n:
+        if low[i]:
+            start = i
+            while i < n and low[i]:
+                i += 1
+            end = i - 1
+            if end >= start:
+                dur = float(times[end] - times[start])
+                if dur >= min_silence_len_s:
+                    local = rms_db[start : end + 1]
+                    min_rel = int(np.argmin(local))
+                    min_idx = start + min_rel
+                    min_db = float(rms_db[min_idx])
+                    windows.append((start, end, min_idx, min_db, dur))
+        i += 1
+    return windows
+
+
+def _uniform_boundaries(duration_s: float, target_count: int) -> List[float]:
+    if target_count <= 0:
+        return [0.0, round(float(duration_s), 3)]
+    step = duration_s / float(target_count)
+    boundaries = [round(i * step, 3) for i in range(target_count)]
+    boundaries.append(round(float(duration_s), 3))
+    boundaries[0] = 0.0
+    return boundaries
+
+
+def detect_boundaries_by_silence_target(
+    audio: np.ndarray,
+    sr: int,
+    cfg: SegmentationConfig,
+    target_count: int,
+) -> SegmentationResult:
+    y = np.asarray(_to_mono(audio), dtype=np.float32)
+    duration_s = len(y) / float(sr)
+    target_count = max(1, int(target_count))
+
+    y_music = _bandpass_music_only(
+        y=y,
+        sr=sr,
+        low_hz=cfg.music_low_hz,
+        high_hz=cfg.music_high_hz,
+    )
+
+    rms = librosa.feature.rms(
+        y=y_music,
+        frame_length=cfg.frame_length,
+        hop_length=cfg.hop_length,
+    )[0]
+    rms_db = librosa.amplitude_to_db(np.maximum(rms, 1e-8), ref=np.max)
+    times = librosa.frames_to_time(
+        np.arange(len(rms_db)), sr=sr, hop_length=cfg.hop_length
+    )
+
+    windows = _silence_windows_from_rms(
+        rms_db=rms_db,
+        times=times,
+        threshold_db=cfg.silence_db_threshold,
+        min_silence_len_s=cfg.silence_min_len_s,
+    )
+
+    candidates: List[BoundaryCandidate] = []
+    for start, end, min_idx, min_db, dur in windows:
+        t = float(times[min_idx])
+        depth = max(0.0, cfg.silence_db_threshold - min_db)
+        # Keep a scalar score for diagnostics, but selection prioritizes duration.
+        score = float(depth * max(dur, 0.1))
+        candidates.append(
+            BoundaryCandidate(
+                time_s=t,
+                score=score,
+                reasons={
+                    "silence": score,
+                    "window_duration_s": dur,
+                    "min_rms_db": min_db,
+                    "silence_depth_db": depth,
+                },
+            )
+        )
+
+    wanted_cuts = max(0, target_count - 1)
+    min_track = max(5.0, cfg.min_track_len_s)
+    selected: List[BoundaryCandidate] = []
+
+    # Biggest silence windows first, then deepest among equals.
+    for cand in sorted(
+        candidates,
+        key=lambda c: (
+            float(c.reasons.get("window_duration_s", 0.0)),
+            float(c.reasons.get("silence_depth_db", 0.0)),
+        ),
+        reverse=True,
+    ):
+        if len(selected) >= wanted_cuts:
+            break
+        if cand.time_s < min_track or duration_s - cand.time_s < min_track:
+            continue
+        if any(abs(cand.time_s - s.time_s) < min_track for s in selected):
+            continue
+        selected.append(cand)
+
+    boundaries = (
+        [0.0] + sorted(round(c.time_s, 3) for c in selected) + [round(duration_s, 3)]
+    )
+    boundaries = sorted(set(boundaries))
+
+    if len(boundaries) - 1 < target_count:
+        boundaries = _uniform_boundaries(
+            duration_s=duration_s, target_count=target_count
+        )
+
+    diagnostics = {
+        "time_s": times,
+        "rms_db": rms_db,
+        "silence_score": np.array([c.score for c in candidates], dtype=float),
+    }
+    return SegmentationResult(
+        boundaries_s=boundaries,
+        candidates=sorted(candidates, key=lambda c: c.time_s),
+        duration_s=float(duration_s),
+        diagnostics=diagnostics,
+    )
 
 
 def _boundaries_from_candidates(

@@ -21,15 +21,11 @@ class DesktopApp:
         self.output_dir = tk.StringVar(value=str(Path.cwd() / "output_tracks"))
         self.status_var = tk.StringVar(value="Select an audio file to start.")
 
-        self.sensitivity = tk.DoubleVar(value=0.55)
         self.min_track = tk.DoubleVar(value=40.0)
-        self.max_track = tk.DoubleVar(value=600.0)
         self.silence_db = tk.DoubleVar(value=-36.0)
         self.silence_min = tk.DoubleVar(value=2)
-        self.w_silence = tk.DoubleVar(value=0.35)
-        self.w_bpm = tk.DoubleVar(value=0.2)
-        self.w_tonal = tk.DoubleVar(value=0.2)
-        self.w_spec = tk.DoubleVar(value=0.25)
+        self.music_low_hz = tk.DoubleVar(value=120.0)
+        self.music_high_hz = tk.DoubleVar(value=5000.0)
 
         self._build_styles()
         self._build_layout()
@@ -85,23 +81,15 @@ class DesktopApp:
         )
         controls.pack(side="left", fill="y", padx=(0, 10))
 
-        self._slider(controls, "Global sensitivity", self.sensitivity, 0.0, 1.0, 0)
-        self._slider(controls, "Min track length (s)", self.min_track, 10.0, 120.0, 1)
-        self._slider(controls, "Max track length (s)", self.max_track, 60.0, 6000.0, 2)
+        self._slider(controls, "Min track length (s)", self.min_track, 10.0, 240.0, 0)
         self._slider(
-            controls, "Silence threshold (dB)", self.silence_db, -70.0, -10.0, 3
+            controls, "Silence threshold (dB)", self.silence_db, -70.0, -10.0, 1
         )
-        self._slider(controls, "Min silence window (s)", self.silence_min, 0.2, 4.0, 4)
-
-        ttk.Separator(controls).grid(row=5, column=0, columnspan=2, sticky="ew", pady=8)
-        ttk.Label(controls, text="Rule weights", font=("Segoe UI", 10, "bold")).grid(
-            row=6, column=0, columnspan=2, sticky="w", pady=(2, 6)
+        self._slider(controls, "Min silence window (s)", self.silence_min, 0.2, 6.0, 2)
+        self._slider(controls, "Music low freq (Hz)", self.music_low_hz, 40.0, 800.0, 3)
+        self._slider(
+            controls, "Music high freq (Hz)", self.music_high_hz, 2000.0, 12000.0, 4
         )
-
-        self._slider(controls, "Silence", self.w_silence, 0.0, 1.0, 7)
-        self._slider(controls, "BPM change", self.w_bpm, 0.0, 1.0, 8)
-        self._slider(controls, "Tonality change", self.w_tonal, 0.0, 1.0, 9)
-        self._slider(controls, "Spectral novelty", self.w_spec, 0.0, 1.0, 10)
 
         run_btn = ttk.Button(
             controls,
@@ -109,12 +97,12 @@ class DesktopApp:
             style="Main.TButton",
             command=self._start_split,
         )
-        run_btn.grid(row=11, column=0, columnspan=2, sticky="ew", pady=(14, 4))
+        run_btn.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(14, 4))
 
         self.open_btn = ttk.Button(
             controls, text="Open Output Folder", command=self._open_output_dir
         )
-        self.open_btn.grid(row=12, column=0, columnspan=2, sticky="ew")
+        self.open_btn.grid(row=6, column=0, columnspan=2, sticky="ew")
 
         result = ttk.LabelFrame(
             body, text="Detected Timeline", style="Card.TLabelframe", padding=10
@@ -217,14 +205,10 @@ class DesktopApp:
         try:
             cfg = SegmentationConfig(
                 min_track_len_s=float(self.min_track.get()),
-                max_track_len_s=float(self.max_track.get()),
                 silence_db_threshold=float(self.silence_db.get()),
                 silence_min_len_s=float(self.silence_min.get()),
-                sensitivity=float(self.sensitivity.get()),
-                weight_silence=float(self.w_silence.get()),
-                weight_bpm_change=float(self.w_bpm.get()),
-                weight_tonality_change=float(self.w_tonal.get()),
-                weight_spectral_novelty=float(self.w_spec.get()),
+                music_low_hz=float(self.music_low_hz.get()),
+                music_high_hz=float(self.music_high_hz.get()),
             )
 
             result = split_audio_file(

@@ -11,10 +11,28 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Split a long MP3 recording into tracks.")
     parser.add_argument("input", type=Path, help="Input audio file path (.mp3 supported if backend decoder is available).")
     parser.add_argument("--output", type=Path, default=Path("output_tracks"), help="Output directory.")
-    parser.add_argument("--min-track", type=float, default=40.0, help="Minimum track length in seconds.")
-    parser.add_argument("--max-track", type=float, default=600.0, help="Maximum track length in seconds.")
+    parser.add_argument(
+        "--min-track", type=float, default=40.0, help="Minimum track length in seconds."
+    )
     parser.add_argument("--silence-db", type=float, default=-36.0, help="Silence threshold in dB.")
-    parser.add_argument("--sensitivity", type=float, default=0.55, help="Detection sensitivity 0..1.")
+    parser.add_argument(
+        "--silence-min",
+        type=float,
+        default=1.2,
+        help="Minimum silence window in seconds.",
+    )
+    parser.add_argument(
+        "--music-low-hz",
+        type=float,
+        default=120.0,
+        help="Low frequency bound for music-only silence analysis.",
+    )
+    parser.add_argument(
+        "--music-high-hz",
+        type=float,
+        default=5000.0,
+        help="High frequency bound for music-only silence analysis.",
+    )
     return parser
 
 
@@ -23,9 +41,10 @@ def main() -> None:
 
     cfg = SegmentationConfig(
         min_track_len_s=args.min_track,
-        max_track_len_s=args.max_track,
         silence_db_threshold=args.silence_db,
-        sensitivity=args.sensitivity,
+        silence_min_len_s=args.silence_min,
+        music_low_hz=args.music_low_hz,
+        music_high_hz=args.music_high_hz,
     )
 
     result = split_audio_file(file_path=args.input, output_dir=args.output, cfg=cfg)

@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path
-import time
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 import librosa
 import numpy as np
@@ -19,9 +18,7 @@ from .naming import parse_recording_name
 from .segmentation import (
     SegmentationConfig,
     SegmentationResult,
-    detect_boundaries,
-    detect_boundaries_with_precomputed,
-    precompute_segmentation,
+    detect_boundaries_by_silence_target,
 )
 
 @dataclass
@@ -214,96 +211,23 @@ def _detect_boundaries_with_target_count(
     target_count: int,
 ) -> SegmentationResult:
     if target_count <= 0:
-        return detect_boundaries(audio=audio, sr=sr, cfg=cfg)
-
-    duration_s = len(audio) / float(sr)
-    est_track_len = duration_s / max(target_count, 1)
-    base_min_track = float(
-        np.clip(est_track_len * 0.45, 10.0, max(15.0, est_track_len))
-    )
-
-    sensitivity_offsets = [0.0, 0.15, -0.15, 0.25, -0.25, 0.35, -0.35]
-    distance_factors = [1.0, 0.8, 1.2, 0.65, 1.35]
-    min_track_factors = [1.0, 0.8, 1.2]
-    total_iterations = (
-        len(min_track_factors) * len(distance_factors) * len(sensitivity_offsets)
-    )
-    iteration = 0
-    run_start = time.perf_counter()
+        target_count = 1
 
     print(
-        "Adaptive segmentation started "
-        f"(target_count={target_count}, total_iterations={total_iterations})"
+        "Silence-only split started "
+        f"(target_count={target_count}, threshold_db={cfg.silence_db_threshold}, "
+        f"music_band={cfg.music_low_hz:.0f}-{cfg.music_high_hz:.0f}Hz)."
     )
-
-    precompute_start = time.perf_counter()
-    precomputed = precompute_segmentation(audio=audio, sr=sr, cfg=cfg)
-    print(
-        "Feature precompute done "
-        f"(elapsed={time.perf_counter() - precompute_start:.2f}s)."
+    best_seg = detect_boundaries_by_silence_target(
+        audio=audio,
+        sr=sr,
+        cfg=cfg,
+        target_count=target_count,
     )
-
-    best_seg: Optional[SegmentationResult] = None
-    best_score: Optional[Tuple[int, float]] = None
-
-    for min_factor in min_track_factors:
-        for distance_factor in distance_factors:
-            for sens_offset in sensitivity_offsets:
-                iteration += 1
-                candidate_cfg = replace(
-                    cfg,
-                    sensitivity=float(np.clip(cfg.sensitivity + sens_offset, 0.0, 1.0)),
-                    novelty_peak_distance_s=max(
-                        2.5, cfg.novelty_peak_distance_s * distance_factor
-                    ),
-                    min_track_len_s=max(8.0, base_min_track * min_factor),
-                )
-                seg = detect_boundaries_with_precomputed(
-                    precomputed=precomputed,
-                    sr=sr,
-                    cfg=candidate_cfg,
-                )
-                count = _segment_count(seg)
-                score = (
-                    abs(count - target_count),
-                    abs(seg.duration_s / max(count, 1) - est_track_len),
-                )
-
-                elapsed = time.perf_counter() - run_start
-                print(
-                    f"Iteration {iteration}/{total_iterations}: "
-                    f"sensitivity={candidate_cfg.sensitivity:.2f}, "
-                    f"peak_distance={candidate_cfg.novelty_peak_distance_s:.2f}, "
-                    f"min_track={candidate_cfg.min_track_len_s:.2f}, "
-                    f"segments={count}, score={score}, elapsed={elapsed:.2f}s"
-                )
-
-                if best_score is None or score < best_score:
-                    best_score = score
-                    best_seg = seg
-                    print(
-                        "  New best candidate: "
-                        f"segments={count}, score={score}, "
-                        f"boundaries={seg.boundaries_s}"
-                    )
-
-                if count == target_count:
-                    print(
-                        "Exact target reached. "
-                        f"Returning after {iteration}/{total_iterations} iterations."
-                    )
-                    return seg
-
-    if best_seg is None:
-        best_seg = detect_boundaries_with_precomputed(
-            precomputed=precomputed,
-            sr=sr,
-            cfg=cfg,
-        )
 
     if _segment_count(best_seg) != target_count:
         print(
-            "No exact target found during adaptive search. "
+            "No exact target reached with silence-only candidates. "
             f"Forcing boundaries from {_segment_count(best_seg)} to {target_count}."
         )
         forced_boundaries = _force_boundaries_to_target_count(
@@ -319,15 +243,25 @@ def _detect_boundaries_with_target_count(
         )
 
     print(
-        "Adaptive segmentation completed "
-        f"(final_segments={_segment_count(best_seg)}, total_elapsed={time.perf_counter() - run_start:.2f}s)."
+        "Silence-only split completed " f"(final_segments={_segment_count(best_seg)})."
     )
 
     return best_seg
 
 
+def _estimate_target_count(duration_s: float, cfg: SegmentationConfig) -> int:
+    est = int(round(duration_s / max(10.0, cfg.min_track_len_s)))
+    return max(1, est)
+
+
 def load_audio(file_path: Path, mono: bool = False) -> tuple[np.ndarray, int]:
     y, sr = librosa.load(path=str(file_path), sr=None, mono=mono)
+
+    # librosa returns multi-channel audio as (channels, samples).
+    # Normalize to (samples, channels) so duration and slicing are consistent.
+    if isinstance(y, np.ndarray) and y.ndim == 2 and y.shape[0] < y.shape[1]:
+        y = y.T
+
     return y, sr
 
 
@@ -337,17 +271,24 @@ def split_audio_file(
     cfg: SegmentationConfig,
 ) -> SplitOutput:
     audio, sr = load_audio(file_path)
+    duration_s = float(audio.shape[0]) / float(sr)
     export_info = _discogs_export_info_from_filename_stem(file_path.stem)
     expected_count = export_info.expected_count
-    if expected_count:
-        seg = _detect_boundaries_with_target_count(
-            audio=audio,
-            sr=sr,
-            cfg=cfg,
-            target_count=expected_count,
+    target_count = expected_count or _estimate_target_count(
+        duration_s=duration_s, cfg=cfg
+    )
+    if not expected_count:
+        print(
+            "Discogs target unavailable. "
+            f"Falling back to silence-only estimated target_count={target_count}."
         )
-    else:
-        seg = detect_boundaries(audio=audio, sr=sr, cfg=cfg)
+
+    seg = _detect_boundaries_with_target_count(
+        audio=audio,
+        sr=sr,
+        cfg=cfg,
+        target_count=target_count,
+    )
 
     base_name = build_export_base_name(file_path.stem)
     track_metadata = _build_track_metadata(seg=seg, export_info=export_info)
