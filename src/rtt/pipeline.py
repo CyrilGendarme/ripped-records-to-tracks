@@ -325,7 +325,7 @@ def _trim_input_edge_silence(
         occupancy_frames
     )
     occupancy = np.convolve(active.astype(np.float64), occupancy_kernel, mode="same")
-    sustained_active = occupancy >= 0.65
+    sustained_active = occupancy >= 0.58
 
     # Allow very short gaps inside a musical section so soft attacks are not
     # split apart by a few quiet frames.
@@ -366,7 +366,14 @@ def _trim_input_edge_silence(
     first, _ = long_runs[0]
     _, last = long_runs[-1]
 
-    pad_frames = max(1, int(round(0.06 / frame_s)))
+    # Compensate for smoothing/occupancy detection lag so transient attacks/decays
+    # are preserved and not shaved off.
+    detection_lag_frames = (smooth_frames // 2) + (occupancy_frames // 2)
+    first = max(0, first - detection_lag_frames)
+    last = min(len(sustained_active) - 1, last + detection_lag_frames)
+
+    # Keep a small context (pydub-like keep_silence behavior) around music.
+    pad_frames = max(1, int(round(0.14 / frame_s)))
     first = max(0, first - pad_frames)
     last = min(len(sustained_active) - 1, last + pad_frames)
 

@@ -184,8 +184,8 @@ def _trim_chunk_silence(
     first, _ = long_runs[0]
     _, last = long_runs[-1]
 
-    # Keep a tiny safety margin around detected activity.
-    pad_frames = max(1, int(round(0.03 / frame_s)))
+    # Keep a safety margin around detected activity to avoid shaving attacks/decays.
+    pad_frames = max(1, int(round(0.12 / frame_s)))
     first = max(0, first - pad_frames)
     last = min(len(active) - 1, last + pad_frames)
 
