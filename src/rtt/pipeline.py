@@ -286,7 +286,8 @@ def _trim_input_edge_silence(
     active = rms_db >= threshold_db
 
     frame_s = frame_ms / 1000.0
-    min_active_run_frames = max(1, int(round(0.12 / frame_s)))
+    min_active_run_s = 0.10
+    min_active_run_frames = max(1, int(round(min_active_run_s / frame_s)))
 
     runs: list[tuple[int, int]] = []
     start = None
