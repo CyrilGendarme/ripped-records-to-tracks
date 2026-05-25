@@ -131,16 +131,18 @@ class DesktopApp:
         )
         result.pack(side="left", fill="both", expand=True)
 
-        columns = ("track", "meta", "start", "end", "duration")
+        columns = ("source", "track", "meta", "start", "end", "duration")
         self.tree = ttk.Treeview(result, columns=columns, show="headings", height=20)
+        self.tree.heading("source", text="Source File")
         self.tree.heading("track", text="#")
         self.tree.heading("meta", text="Artist - Track - Album - Record Ref")
         self.tree.heading("start", text="Start (s)")
         self.tree.heading("end", text="End (s)")
         self.tree.heading("duration", text="Duration (s)")
 
+        self.tree.column("source", width=220, anchor="w")
         self.tree.column("track", width=40, anchor="center")
-        self.tree.column("meta", width=520, anchor="w")
+        self.tree.column("meta", width=360, anchor="w")
         self.tree.column("start", width=80, anchor="e")
         self.tree.column("end", width=80, anchor="e")
         self.tree.column("duration", width=90, anchor="e")
@@ -267,18 +269,17 @@ class DesktopApp:
                 self.root.after(0, lambda: self.status_var.set("No files processed."))
                 return
 
-            last_file, last_result = results[-1]
             total_tracks = sum(
                 max(0, len(r.segmentation.boundaries_s) - 1) for _, r in results
             )
             self.root.after(
                 0,
-                lambda: self._render_result(last_result),
+                lambda: self._render_results(results),
             )
             self.root.after(
                 0,
                 lambda: self.status_var.set(
-                    f"Done. Processed {len(results)} file(s), created {total_tracks} tracks total. Showing last: {last_file.name}."
+                    f"Done. Processed {len(results)} file(s), created {total_tracks} tracks total."
                 ),
             )
             self.root.after(
@@ -297,35 +298,41 @@ class DesktopApp:
                 ),
             )
 
-    def _render_result(self, result: SplitOutput) -> None:
-        boundaries = result.segmentation.boundaries_s
+    def _render_results(self, results: List[tuple[Path, SplitOutput]]) -> None:
         for item in self.tree.get_children():
             self.tree.delete(item)
 
-        for idx in range(len(boundaries) - 1):
-            start_s = boundaries[idx]
-            end_s = boundaries[idx + 1]
-            meta = (
-                result.track_metadata[idx] if idx < len(result.track_metadata) else None
-            )
-            artist = meta.artist if meta and meta.artist else "?"
-            title = meta.title if meta and meta.title else f"Track {idx + 1:02d}"
-            album = meta.album if meta and meta.album else "?"
-            record_ref = meta.record_ref if meta and meta.record_ref else "?"
-            meta_text = f"{artist} - {title} - {album} - {record_ref}"
-            self.tree.insert(
-                "",
-                "end",
-                values=(
-                    idx + 1,
-                    meta_text,
-                    f"{start_s:.2f}",
-                    f"{end_s:.2f}",
-                    f"{(end_s - start_s):.2f}",
-                ),
-            )
+        total_tracks = 0
+        for input_file, result in results:
+            boundaries = result.segmentation.boundaries_s
+            for idx in range(len(boundaries) - 1):
+                start_s = boundaries[idx]
+                end_s = boundaries[idx + 1]
+                meta = (
+                    result.track_metadata[idx]
+                    if idx < len(result.track_metadata)
+                    else None
+                )
+                artist = meta.artist if meta and meta.artist else "?"
+                title = meta.title if meta and meta.title else f"Track {idx + 1:02d}"
+                album = meta.album if meta and meta.album else "?"
+                record_ref = meta.record_ref if meta and meta.record_ref else "?"
+                meta_text = f"{artist} - {title} - {album} - {record_ref}"
+                self.tree.insert(
+                    "",
+                    "end",
+                    values=(
+                        input_file.name,
+                        idx + 1,
+                        meta_text,
+                        f"{start_s:.2f}",
+                        f"{end_s:.2f}",
+                        f"{(end_s - start_s):.2f}",
+                    ),
+                )
+                total_tracks += 1
 
-        self.status_var.set(f"Done. Created {len(boundaries) - 1} tracks.")
+        self.status_var.set(f"Done. Created {total_tracks} tracks.")
 
 
 def main() -> None:
