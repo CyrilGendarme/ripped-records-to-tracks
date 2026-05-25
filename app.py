@@ -216,9 +216,7 @@ class DesktopApp:
             )
             self.root.after(
                 0,
-                lambda: self._render_result(
-                    result.segmentation.boundaries_s, result.zip_path
-                ),
+                lambda: self._render_result(result.segmentation.boundaries_s),
             )
         except Exception as exc:  # noqa: BLE001
             self.root.after(0, lambda: messagebox.showerror("Split failed", str(exc)))
@@ -229,7 +227,7 @@ class DesktopApp:
                 ),
             )
 
-    def _render_result(self, boundaries: list[float], zip_path: Path) -> None:
+    def _render_result(self, boundaries: list[float]) -> None:
         for item in self.tree.get_children():
             self.tree.delete(item)
 
@@ -247,12 +245,8 @@ class DesktopApp:
                 ),
             )
 
-        self.status_var.set(
-            f"Done. Created {len(boundaries) - 1} tracks. Zip bundle: {zip_path}"
-        )
-        messagebox.showinfo(
-            "Split complete", f"Track export completed.\n\nZIP: {zip_path}"
-        )
+        self.status_var.set(f"Done. Created {len(boundaries) - 1} tracks.")
+        messagebox.showinfo("Split complete", "Track export completed.")
 
 
 def main() -> None:

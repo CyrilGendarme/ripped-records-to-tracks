@@ -9,7 +9,6 @@ import numpy as np
 
 from .exporter import (
     TrackExportMetadata,
-    build_zip,
     export_tracks_to_wav,
     infer_export_settings,
 )
@@ -25,7 +24,6 @@ from .segmentation import (
 class SplitOutput:
     segmentation: SegmentationResult
     files: List[Path]
-    zip_path: Path
     discogs_tracks: List[str] = field(default_factory=list)
 
 
@@ -302,10 +300,8 @@ def split_audio_file(
         track_metadata=track_metadata,
         export_settings=export_settings,
     )
-    zip_path = build_zip(files, output_dir / f"{base_name}_tracks.zip")
     return SplitOutput(
         segmentation=seg,
         files=files,
-        zip_path=zip_path,
         discogs_tracks=export_info.display_tracks,
     )

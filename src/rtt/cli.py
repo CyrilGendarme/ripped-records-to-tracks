@@ -51,7 +51,6 @@ def main() -> None:
 
     print(f"Detected boundaries: {result.segmentation.boundaries_s}")
     print(f"Exported {len(result.files)} track files")
-    print(f"Zip bundle: {result.zip_path}")
     if result.discogs_tracks:
         print("Discogs tracks (side - title):")
         for entry in result.discogs_tracks:

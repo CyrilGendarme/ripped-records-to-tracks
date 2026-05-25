@@ -3,8 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import re
-from typing import Iterable, List
-import zipfile
+from typing import List
 
 import numpy as np
 from pydub import AudioSegment
@@ -174,11 +173,3 @@ def export_tracks_to_wav(
         written.append(out_path)
 
     return written
-
-
-def build_zip(files: Iterable[Path], zip_path: Path) -> Path:
-    zip_path.parent.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(zip_path, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for file_path in files:
-            zf.write(file_path, arcname=file_path.name)
-    return zip_path
