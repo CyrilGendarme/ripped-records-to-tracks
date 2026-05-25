@@ -25,7 +25,7 @@ class DesktopApp:
         self.min_track = tk.DoubleVar(value=40.0)
         self.max_track = tk.DoubleVar(value=600.0)
         self.silence_db = tk.DoubleVar(value=-36.0)
-        self.silence_min = tk.DoubleVar(value=1.2)
+        self.silence_min = tk.DoubleVar(value=2)
         self.w_silence = tk.DoubleVar(value=0.35)
         self.w_bpm = tk.DoubleVar(value=0.2)
         self.w_tonal = tk.DoubleVar(value=0.2)
@@ -38,9 +38,16 @@ class DesktopApp:
         style = ttk.Style()
         style.theme_use("clam")
         style.configure("Card.TLabelframe", background="#fffdf7", borderwidth=1)
-        style.configure("Card.TLabelframe.Label", background="#fffdf7", foreground="#1f2937", font=("Segoe UI", 10, "bold"))
+        style.configure(
+            "Card.TLabelframe.Label",
+            background="#fffdf7",
+            foreground="#1f2937",
+            font=("Segoe UI", 10, "bold"),
+        )
         style.configure("Main.TButton", font=("Segoe UI", 10, "bold"), padding=8)
-        style.configure("TLabel", background="#f6f2e9", foreground="#111827", font=("Segoe UI", 10))
+        style.configure(
+            "TLabel", background="#f6f2e9", foreground="#111827", font=("Segoe UI", 10)
+        )
 
     def _build_layout(self) -> None:
         wrapper = ttk.Frame(self.root, padding=14)
@@ -53,39 +60,65 @@ class DesktopApp:
         )
         title.pack(anchor="w", pady=(0, 8))
 
-        picker = ttk.LabelFrame(wrapper, text="Audio & Output", style="Card.TLabelframe", padding=12)
+        picker = ttk.LabelFrame(
+            wrapper, text="Audio & Output", style="Card.TLabelframe", padding=12
+        )
         picker.pack(fill="x", pady=(0, 10))
 
-        self._path_row(picker, "Input audio", self.input_path, self._pick_input, "Choose File", 0)
-        self._path_row(picker, "Output folder", self.output_dir, self._pick_output, "Choose Folder", 1)
+        self._path_row(
+            picker, "Input audio", self.input_path, self._pick_input, "Choose File", 0
+        )
+        self._path_row(
+            picker,
+            "Output folder",
+            self.output_dir,
+            self._pick_output,
+            "Choose Folder",
+            1,
+        )
 
         body = ttk.Frame(wrapper)
         body.pack(fill="both", expand=True)
 
-        controls = ttk.LabelFrame(body, text="Segmentation Rules", style="Card.TLabelframe", padding=12)
+        controls = ttk.LabelFrame(
+            body, text="Segmentation Rules", style="Card.TLabelframe", padding=12
+        )
         controls.pack(side="left", fill="y", padx=(0, 10))
 
         self._slider(controls, "Global sensitivity", self.sensitivity, 0.0, 1.0, 0)
-        self._slider(controls, "Min track length (s)", self.min_track, 10.0, 240.0, 1)
-        self._slider(controls, "Max track length (s)", self.max_track, 60.0, 1200.0, 2)
-        self._slider(controls, "Silence threshold (dB)", self.silence_db, -70.0, -10.0, 3)
+        self._slider(controls, "Min track length (s)", self.min_track, 10.0, 120.0, 1)
+        self._slider(controls, "Max track length (s)", self.max_track, 60.0, 6000.0, 2)
+        self._slider(
+            controls, "Silence threshold (dB)", self.silence_db, -70.0, -10.0, 3
+        )
         self._slider(controls, "Min silence window (s)", self.silence_min, 0.2, 4.0, 4)
 
         ttk.Separator(controls).grid(row=5, column=0, columnspan=2, sticky="ew", pady=8)
-        ttk.Label(controls, text="Rule weights", font=("Segoe UI", 10, "bold")).grid(row=6, column=0, columnspan=2, sticky="w", pady=(2, 6))
+        ttk.Label(controls, text="Rule weights", font=("Segoe UI", 10, "bold")).grid(
+            row=6, column=0, columnspan=2, sticky="w", pady=(2, 6)
+        )
 
         self._slider(controls, "Silence", self.w_silence, 0.0, 1.0, 7)
         self._slider(controls, "BPM change", self.w_bpm, 0.0, 1.0, 8)
         self._slider(controls, "Tonality change", self.w_tonal, 0.0, 1.0, 9)
         self._slider(controls, "Spectral novelty", self.w_spec, 0.0, 1.0, 10)
 
-        run_btn = ttk.Button(controls, text="Split Into Tracks", style="Main.TButton", command=self._start_split)
+        run_btn = ttk.Button(
+            controls,
+            text="Split Into Tracks",
+            style="Main.TButton",
+            command=self._start_split,
+        )
         run_btn.grid(row=11, column=0, columnspan=2, sticky="ew", pady=(14, 4))
 
-        self.open_btn = ttk.Button(controls, text="Open Output Folder", command=self._open_output_dir)
+        self.open_btn = ttk.Button(
+            controls, text="Open Output Folder", command=self._open_output_dir
+        )
         self.open_btn.grid(row=12, column=0, columnspan=2, sticky="ew")
 
-        result = ttk.LabelFrame(body, text="Detected Timeline", style="Card.TLabelframe", padding=10)
+        result = ttk.LabelFrame(
+            body, text="Detected Timeline", style="Card.TLabelframe", padding=10
+        )
         result.pack(side="left", fill="both", expand=True)
 
         columns = ("track", "start", "end", "duration")
@@ -104,15 +137,33 @@ class DesktopApp:
         status = ttk.Label(wrapper, textvariable=self.status_var, font=("Consolas", 10))
         status.pack(anchor="w", pady=(10, 0))
 
-    def _path_row(self, parent: ttk.LabelFrame, label: str, var: tk.StringVar, callback, button_text: str, row: int) -> None:
-        ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", padx=(0, 8), pady=4)
+    def _path_row(
+        self,
+        parent: ttk.LabelFrame,
+        label: str,
+        var: tk.StringVar,
+        callback,
+        button_text: str,
+        row: int,
+    ) -> None:
+        ttk.Label(parent, text=label).grid(
+            row=row, column=0, sticky="w", padx=(0, 8), pady=4
+        )
         entry = ttk.Entry(parent, textvariable=var, width=92)
         entry.grid(row=row, column=1, sticky="ew", pady=4)
         btn = ttk.Button(parent, text=button_text, command=callback)
         btn.grid(row=row, column=2, padx=(8, 0), pady=4)
         parent.columnconfigure(1, weight=1)
 
-    def _slider(self, parent: ttk.LabelFrame, label: str, var: tk.DoubleVar, frm: float, to: float, row: int) -> None:
+    def _slider(
+        self,
+        parent: ttk.LabelFrame,
+        label: str,
+        var: tk.DoubleVar,
+        frm: float,
+        to: float,
+        row: int,
+    ) -> None:
         ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w")
         scale = ttk.Scale(parent, variable=var, from_=frm, to=to)
         scale.grid(row=row, column=1, sticky="ew", padx=(10, 0), pady=4)
@@ -121,7 +172,10 @@ class DesktopApp:
     def _pick_input(self) -> None:
         selected = filedialog.askopenfilename(
             title="Select audio file",
-            filetypes=[("Audio", "*.mp3 *.wav *.flac *.ogg *.m4a"), ("All files", "*.*")],
+            filetypes=[
+                ("Audio", "*.mp3 *.wav *.flac *.ogg *.m4a"),
+                ("All files", "*.*"),
+            ],
         )
         if selected:
             self.input_path.set(selected)
@@ -136,19 +190,27 @@ class DesktopApp:
         if path.exists():
             os.startfile(path)
         else:
-            messagebox.showwarning("Missing folder", "Output folder does not exist yet.")
+            messagebox.showwarning(
+                "Missing folder", "Output folder does not exist yet."
+            )
 
     def _start_split(self) -> None:
         input_file = Path(self.input_path.get())
         output_folder = Path(self.output_dir.get())
 
         if not input_file.exists():
-            messagebox.showerror("Input missing", "Please choose a valid input audio file.")
+            messagebox.showerror(
+                "Input missing", "Please choose a valid input audio file."
+            )
             return
 
-        self.status_var.set("Analyzing audio... this can take a while for long recordings.")
+        self.status_var.set(
+            "Analyzing audio... this can take a while for long recordings."
+        )
 
-        worker = threading.Thread(target=self._run_split, args=(input_file, output_folder), daemon=True)
+        worker = threading.Thread(
+            target=self._run_split, args=(input_file, output_folder), daemon=True
+        )
         worker.start()
 
     def _run_split(self, input_file: Path, output_folder: Path) -> None:
@@ -165,11 +227,23 @@ class DesktopApp:
                 weight_spectral_novelty=float(self.w_spec.get()),
             )
 
-            result = split_audio_file(file_path=input_file, output_dir=output_folder, cfg=cfg)
-            self.root.after(0, lambda: self._render_result(result.segmentation.boundaries_s, result.zip_path))
+            result = split_audio_file(
+                file_path=input_file, output_dir=output_folder, cfg=cfg
+            )
+            self.root.after(
+                0,
+                lambda: self._render_result(
+                    result.segmentation.boundaries_s, result.zip_path
+                ),
+            )
         except Exception as exc:  # noqa: BLE001
             self.root.after(0, lambda: messagebox.showerror("Split failed", str(exc)))
-            self.root.after(0, lambda: self.status_var.set("Split failed. Adjust parameters and retry."))
+            self.root.after(
+                0,
+                lambda: self.status_var.set(
+                    "Split failed. Adjust parameters and retry."
+                ),
+            )
 
     def _render_result(self, boundaries: list[float], zip_path: Path) -> None:
         for item in self.tree.get_children():
@@ -189,8 +263,12 @@ class DesktopApp:
                 ),
             )
 
-        self.status_var.set(f"Done. Created {len(boundaries) - 1} tracks. Zip bundle: {zip_path}")
-        messagebox.showinfo("Split complete", f"Track export completed.\n\nZIP: {zip_path}")
+        self.status_var.set(
+            f"Done. Created {len(boundaries) - 1} tracks. Zip bundle: {zip_path}"
+        )
+        messagebox.showinfo(
+            "Split complete", f"Track export completed.\n\nZIP: {zip_path}"
+        )
 
 
 def main() -> None:

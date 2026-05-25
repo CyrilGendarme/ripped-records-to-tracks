@@ -19,7 +19,7 @@ class SegmentationConfig:
     novelty_peak_distance_s: float = 8.0
     sensitivity: float = 0.55
     weight_silence: float = 0.35
-    weight_bpm_change: float = 0.2
+    weight_bpm_change: float = 0.6
     weight_tonality_change: float = 0.2
     weight_spectral_novelty: float = 0.25
 
@@ -37,6 +37,19 @@ class SegmentationResult:
     candidates: List[BoundaryCandidate]
     duration_s: float
     diagnostics: Dict[str, np.ndarray]
+
+
+@dataclass
+class PrecomputedSegmentation:
+    duration_s: float
+    rms_db: np.ndarray
+    times: np.ndarray
+    combo_score: np.ndarray
+    bpm_score: np.ndarray
+    tonality_score: np.ndarray
+    novelty_score: np.ndarray
+    silence_score: np.ndarray
+    silence_idx: np.ndarray
 
 
 def _normalize_0_1(x: np.ndarray) -> np.ndarray:
@@ -102,7 +115,47 @@ def _silence_candidates(
     return score, candidates_idx
 
 
-def detect_boundaries(audio: np.ndarray, sr: int, cfg: SegmentationConfig) -> SegmentationResult:
+def _boundaries_from_candidates(
+    candidates: List[BoundaryCandidate],
+    duration_s: float,
+    min_track_len_s: float,
+    max_track_len_s: float,
+) -> List[float]:
+    boundaries = [0.0]
+    last = 0.0
+    max_track = max(min_track_len_s + 1.0, max_track_len_s)
+    min_track = max(5.0, min_track_len_s)
+
+    for cand in sorted(candidates, key=lambda c: c.time_s):
+        if cand.time_s - last < min_track:
+            continue
+        if cand.time_s - last > max_track:
+            forced = min(last + max_track, duration_s)
+            if forced - last >= min_track:
+                boundaries.append(float(forced))
+                last = float(forced)
+        if cand.time_s - last >= min_track:
+            boundaries.append(cand.time_s)
+            last = cand.time_s
+
+    if duration_s - last >= min_track * 0.5:
+        boundaries.append(duration_s)
+    elif boundaries[-1] < duration_s:
+        boundaries[-1] = duration_s
+
+    boundaries = sorted(set(round(v, 3) for v in boundaries))
+    if boundaries[0] != 0.0:
+        boundaries = [0.0] + boundaries
+    if boundaries[-1] != round(duration_s, 3):
+        boundaries.append(round(duration_s, 3))
+    return boundaries
+
+
+def precompute_segmentation(
+    audio: np.ndarray,
+    sr: int,
+    cfg: SegmentationConfig,
+) -> PrecomputedSegmentation:
     if audio.ndim > 1:
         y = np.mean(audio, axis=1)
     else:
@@ -158,66 +211,77 @@ def detect_boundaries(audio: np.ndarray, sr: int, cfg: SegmentationConfig) -> Se
     )
     combo_score = _normalize_0_1(_rolling_mean(raw_combo, 3))
 
+    return PrecomputedSegmentation(
+        duration_s=float(duration_s),
+        rms_db=rms_db,
+        times=times,
+        combo_score=combo_score,
+        bpm_score=bpm_score,
+        tonality_score=tonality_score,
+        novelty_score=novelty_score,
+        silence_score=silence_score,
+        silence_idx=np.asarray(silence_idx, dtype=int),
+    )
+
+
+def detect_boundaries_with_precomputed(
+    precomputed: PrecomputedSegmentation,
+    sr: int,
+    cfg: SegmentationConfig,
+) -> SegmentationResult:
     min_peak_height = np.clip(0.78 - cfg.sensitivity * 0.55, 0.12, 0.72)
     distance_frames = max(1, int(cfg.novelty_peak_distance_s * sr / cfg.hop_length))
-    peak_idx, _ = find_peaks(combo_score, height=min_peak_height, distance=distance_frames)
+    peak_idx, _ = find_peaks(
+        precomputed.combo_score,
+        height=min_peak_height,
+        distance=distance_frames,
+    )
 
-    for idx in silence_idx:
-        if 0 <= idx < len(combo_score):
-            peak_idx = np.append(peak_idx, idx)
+    if precomputed.silence_idx.size:
+        peak_idx = np.append(peak_idx, precomputed.silence_idx)
     peak_idx = np.unique(np.sort(peak_idx))
 
     candidates: List[BoundaryCandidate] = []
     for idx in peak_idx:
-        t = float(times[idx])
+        t = float(precomputed.times[idx])
         reasons = {
-            "silence": float(silence_score[idx]),
-            "bpm_change": float(bpm_score[idx]),
-            "tonality_change": float(tonality_score[idx]),
-            "spectral_novelty": float(novelty_score[idx]),
+            "silence": float(precomputed.silence_score[idx]),
+            "bpm_change": float(precomputed.bpm_score[idx]),
+            "tonality_change": float(precomputed.tonality_score[idx]),
+            "spectral_novelty": float(precomputed.novelty_score[idx]),
         }
-        candidates.append(BoundaryCandidate(time_s=t, score=float(combo_score[idx]), reasons=reasons))
+        candidates.append(
+            BoundaryCandidate(
+                time_s=t, score=float(precomputed.combo_score[idx]), reasons=reasons
+            )
+        )
 
-    boundaries = [0.0]
-    last = 0.0
-    max_track = max(cfg.min_track_len_s + 1.0, cfg.max_track_len_s)
-    min_track = max(5.0, cfg.min_track_len_s)
-
-    for cand in sorted(candidates, key=lambda c: c.time_s):
-        if cand.time_s - last < min_track:
-            continue
-        if cand.time_s - last > max_track:
-            forced = min(last + max_track, duration_s)
-            if forced - last >= min_track:
-                boundaries.append(float(forced))
-                last = float(forced)
-        if cand.time_s - last >= min_track:
-            boundaries.append(cand.time_s)
-            last = cand.time_s
-
-    if duration_s - last >= min_track * 0.5:
-        boundaries.append(duration_s)
-    elif boundaries[-1] < duration_s:
-        boundaries[-1] = duration_s
-
-    boundaries = sorted(set(round(v, 3) for v in boundaries))
-    if boundaries[0] != 0.0:
-        boundaries = [0.0] + boundaries
-    if boundaries[-1] != round(duration_s, 3):
-        boundaries.append(round(duration_s, 3))
+    boundaries = _boundaries_from_candidates(
+        candidates=candidates,
+        duration_s=precomputed.duration_s,
+        min_track_len_s=cfg.min_track_len_s,
+        max_track_len_s=cfg.max_track_len_s,
+    )
 
     diagnostics = {
-        "time_s": times,
-        "rms_db": rms_db,
-        "combo_score": combo_score,
-        "bpm_score": bpm_score,
-        "tonality_score": tonality_score,
-        "novelty_score": novelty_score,
-        "silence_score": silence_score,
+        "time_s": precomputed.times,
+        "rms_db": precomputed.rms_db,
+        "combo_score": precomputed.combo_score,
+        "bpm_score": precomputed.bpm_score,
+        "tonality_score": precomputed.tonality_score,
+        "novelty_score": precomputed.novelty_score,
+        "silence_score": precomputed.silence_score,
     }
     return SegmentationResult(
         boundaries_s=boundaries,
         candidates=candidates,
-        duration_s=float(duration_s),
+        duration_s=precomputed.duration_s,
         diagnostics=diagnostics,
     )
+
+
+def detect_boundaries(
+    audio: np.ndarray, sr: int, cfg: SegmentationConfig
+) -> SegmentationResult:
+    precomputed = precompute_segmentation(audio=audio, sr=sr, cfg=cfg)
+    return detect_boundaries_with_precomputed(precomputed=precomputed, sr=sr, cfg=cfg)

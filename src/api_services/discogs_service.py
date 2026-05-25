@@ -20,7 +20,13 @@ import re
 import httpx
 
 from .config import settings
-from .discogs_models import DiscogsReleaseTrack, DiscogsResult, DiscogsTrack, PriceStats
+from .discogs_models import (
+    DiscogsReleaseInfo,
+    DiscogsReleaseTrack,
+    DiscogsResult,
+    DiscogsTrack,
+    PriceStats,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -251,40 +257,56 @@ def search_releases(
     return output
 
 
-def get_release_tracks_by_record_ref(
+def _search_releases_by_record_ref(
+    record_ref: str,
+    artist: Optional[str],
+    limit: int,
+) -> List[DiscogsResult]:
+    releases = search_releases(artist=artist, catno=record_ref, limit=limit)
+    if releases:
+        return releases
+
+    fallback_query = {"q": f"{artist or ''} {record_ref}".strip()}
+    raw = _search_raw(fallback_query, limit)
+    fallback: List[DiscogsResult] = []
+    for item in raw:
+        parsed = _parse_result(item)
+        if parsed:
+            fallback.append(parsed)
+    return fallback
+
+
+def _pick_release_for_record_ref(
+    releases: List[DiscogsResult],
+    record_ref: str,
+) -> Optional[DiscogsResult]:
+    if not releases:
+        return None
+    wanted = _normalize_catno(record_ref)
+    for release in releases:
+        if _normalize_catno(release.catno) == wanted:
+            return release
+    return releases[0]
+
+
+def get_release_info_by_record_ref(
     record_ref: str,
     artist: Optional[str] = None,
     limit: int = 8,
-) -> List[DiscogsReleaseTrack]:
-    """Resolve a record reference (catalog number) to release tracks with A/B/C/D sides.
-
-    Returns only tracks whose `position` starts with side A, B, C or D.
-    """
+) -> Optional[DiscogsReleaseInfo]:
+    """Resolve record reference to release metadata and A/B/C/D tracks."""
     record_ref = (record_ref or "").strip()
     if not record_ref:
-        return []
+        return None
 
-    releases = search_releases(artist=artist, catno=record_ref, limit=limit)
-    if not releases:
-        fallback_query = {"q": f"{artist or ''} {record_ref}".strip()}
-        raw = _search_raw(fallback_query, limit)
-        releases = []
-        for item in raw:
-            parsed = _parse_result(item)
-            if parsed:
-                releases.append(parsed)
-
-    if not releases:
-        return []
-
-    wanted = _normalize_catno(record_ref)
-    chosen = None
-    for release in releases:
-        if _normalize_catno(release.catno) == wanted:
-            chosen = release
-            break
+    releases = _search_releases_by_record_ref(
+        record_ref=record_ref,
+        artist=artist,
+        limit=limit,
+    )
+    chosen = _pick_release_for_record_ref(releases, record_ref=record_ref)
     if chosen is None:
-        chosen = releases[0]
+        return None
 
     tracks: List[DiscogsReleaseTrack] = []
     for track in chosen.tracklist:
@@ -302,4 +324,28 @@ def get_release_tracks_by_record_ref(
             )
         )
 
-    return tracks
+    return DiscogsReleaseInfo(
+        artist=chosen.artist,
+        album=_safe(chosen.title),
+        record_ref=_safe(chosen.catno) or record_ref,
+        tracks=tracks,
+    )
+
+
+def get_release_tracks_by_record_ref(
+    record_ref: str,
+    artist: Optional[str] = None,
+    limit: int = 8,
+) -> List[DiscogsReleaseTrack]:
+    """Resolve a record reference (catalog number) to release tracks with A/B/C/D sides.
+
+    Returns only tracks whose `position` starts with side A, B, C or D.
+    """
+    record_ref = (record_ref or "").strip()
+    if not record_ref:
+        return []
+
+    info = get_release_info_by_record_ref(record_ref=record_ref, artist=artist, limit=limit)
+    if info is None:
+        return []
+    return info.tracks

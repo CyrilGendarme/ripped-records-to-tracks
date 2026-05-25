@@ -37,6 +37,13 @@ class DiscogsReleaseTrack(BaseModel):
     duration: Optional[str] = None
 
 
+class DiscogsReleaseInfo(BaseModel):
+    artist: Optional[str] = None
+    album: Optional[str] = None
+    record_ref: Optional[str] = None
+    tracks: List[DiscogsReleaseTrack] = []
+
+
 class PriceStats(BaseModel):
     currency: Optional[str] = None
     num_for_sale: Optional[int] = None

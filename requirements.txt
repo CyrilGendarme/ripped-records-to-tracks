@@ -3,5 +3,6 @@ numpy
 scipy
 soundfile
 httpx
+mutagen
 pydantic
 pydantic-settings
