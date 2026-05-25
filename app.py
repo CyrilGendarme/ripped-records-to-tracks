@@ -26,6 +26,7 @@ class DesktopApp:
         self.silence_min = tk.DoubleVar(value=2)
         self.music_low_hz = tk.DoubleVar(value=120.0)
         self.music_high_hz = tk.DoubleVar(value=5000.0)
+        self.trim_silence_db = tk.DoubleVar(value=-52.0)
 
         self._build_styles()
         self._build_layout()
@@ -90,6 +91,14 @@ class DesktopApp:
         self._slider(
             controls, "Music high freq (Hz)", self.music_high_hz, 2000.0, 12000.0, 4
         )
+        self._slider(
+            controls,
+            "Trim start/end silence (dB)",
+            self.trim_silence_db,
+            -80.0,
+            -20.0,
+            5,
+        )
 
         run_btn = ttk.Button(
             controls,
@@ -97,12 +106,12 @@ class DesktopApp:
             style="Main.TButton",
             command=self._start_split,
         )
-        run_btn.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(14, 4))
+        run_btn.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(14, 4))
 
         self.open_btn = ttk.Button(
             controls, text="Open Output Folder", command=self._open_output_dir
         )
-        self.open_btn.grid(row=6, column=0, columnspan=2, sticky="ew")
+        self.open_btn.grid(row=7, column=0, columnspan=2, sticky="ew")
 
         result = ttk.LabelFrame(
             body, text="Detected Timeline", style="Card.TLabelframe", padding=10
@@ -209,6 +218,7 @@ class DesktopApp:
                 silence_min_len_s=float(self.silence_min.get()),
                 music_low_hz=float(self.music_low_hz.get()),
                 music_high_hz=float(self.music_high_hz.get()),
+                trim_silence_db_threshold=float(self.trim_silence_db.get()),
             )
 
             result = split_audio_file(

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import re
-from typing import List
+from typing import Iterable, List
 
 import numpy as np
 from pydub import AudioSegment
@@ -133,6 +133,73 @@ def _chunk_to_audio_segment(chunk: np.ndarray, sr: int) -> AudioSegment:
     )
 
 
+def _trim_chunk_silence(
+    chunk: np.ndarray,
+    sr: int,
+    threshold_db: float,
+    frame_ms: float = 10.0,
+) -> np.ndarray:
+    arr = np.asarray(chunk, dtype=np.float32)
+    if arr.size == 0:
+        return arr
+
+    n_samples = int(arr.shape[0]) if arr.ndim > 1 else int(arr.shape[0])
+    frame_len = max(1, int(round(sr * frame_ms / 1000.0)))
+
+    if arr.ndim == 1:
+        mono = arr
+    else:
+        mono = np.sqrt(np.mean(np.square(arr), axis=1, dtype=np.float64)).astype(
+            np.float32
+        )
+
+    usable = (len(mono) // frame_len) * frame_len
+    if usable <= 0:
+        return arr
+
+    framed = mono[:usable].reshape(-1, frame_len)
+    rms = np.sqrt(np.mean(np.square(framed), axis=1, dtype=np.float64))
+    rms_db = 20.0 * np.log10(np.maximum(rms, 1e-9))
+    active = rms_db >= threshold_db
+
+    # Ignore isolated spikes (clicks/crackles) by requiring sustained activity.
+    frame_s = frame_ms / 1000.0
+    min_active_run_frames = max(1, int(round(0.12 / frame_s)))
+
+    runs: list[tuple[int, int]] = []
+    start = None
+    for i, is_active in enumerate(active):
+        if is_active and start is None:
+            start = i
+        elif not is_active and start is not None:
+            runs.append((start, i - 1))
+            start = None
+    if start is not None:
+        runs.append((start, len(active) - 1))
+
+    long_runs = [run for run in runs if (run[1] - run[0] + 1) >= min_active_run_frames]
+    if not long_runs:
+        return arr
+
+    first, _ = long_runs[0]
+    _, last = long_runs[-1]
+
+    # Keep a tiny safety margin around detected activity.
+    pad_frames = max(1, int(round(0.03 / frame_s)))
+    first = max(0, first - pad_frames)
+    last = min(len(active) - 1, last + pad_frames)
+
+    start_i = max(0, first * frame_len)
+    end_i = min(n_samples, (last + 1) * frame_len)
+
+    if end_i - start_i < max(1, int(0.05 * sr)):
+        return arr
+
+    if arr.ndim == 1:
+        return arr[start_i:end_i]
+    return arr[start_i:end_i, :]
+
+
 def export_tracks_to_wav(
     audio: np.ndarray,
     sr: int,
@@ -141,6 +208,7 @@ def export_tracks_to_wav(
     base_name: str,
     track_metadata: List[TrackExportMetadata] | None = None,
     export_settings: AudioExportSettings | None = None,
+    trim_silence_db_threshold: float | None = None,
 ) -> List[Path]:
     settings = export_settings or AudioExportSettings()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -158,6 +226,12 @@ def export_tracks_to_wav(
             continue
 
         chunk = audio[start_i:end_i]
+        if trim_silence_db_threshold is not None:
+            chunk = _trim_chunk_silence(
+                chunk=chunk,
+                sr=sr,
+                threshold_db=float(trim_silence_db_threshold),
+            )
         fallback_name = _safe_track_name(base_name, idx + 1, start_s, end_s)
         meta = track_metadata[idx] if track_metadata and idx < len(track_metadata) else None
         out_name = _name_from_metadata(meta, fallback_name)

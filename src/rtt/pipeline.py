@@ -252,6 +252,79 @@ def _estimate_target_count(duration_s: float, cfg: SegmentationConfig) -> int:
     return max(1, est)
 
 
+def _trim_input_edge_silence(
+    audio: np.ndarray,
+    sr: int,
+    threshold_db: float,
+    frame_ms: float = 10.0,
+) -> tuple[np.ndarray, float, float]:
+    """Trim only global start/end silence from input before any other processing.
+
+    Returns (trimmed_audio, start_trim_s, end_trim_s).
+    """
+    arr = np.asarray(audio, dtype=np.float32)
+    if arr.size == 0:
+        return arr, 0.0, 0.0
+
+    if arr.ndim == 1:
+        mono = arr
+        n_samples = int(arr.shape[0])
+    else:
+        mono = np.sqrt(np.mean(np.square(arr), axis=1, dtype=np.float64)).astype(
+            np.float32
+        )
+        n_samples = int(arr.shape[0])
+
+    frame_len = max(1, int(round(sr * frame_ms / 1000.0)))
+    usable = (len(mono) // frame_len) * frame_len
+    if usable <= 0:
+        return arr, 0.0, 0.0
+
+    framed = mono[:usable].reshape(-1, frame_len)
+    rms = np.sqrt(np.mean(np.square(framed), axis=1, dtype=np.float64))
+    rms_db = 20.0 * np.log10(np.maximum(rms, 1e-9))
+    active = rms_db >= threshold_db
+
+    frame_s = frame_ms / 1000.0
+    min_active_run_frames = max(1, int(round(0.12 / frame_s)))
+
+    runs: list[tuple[int, int]] = []
+    start = None
+    for i, is_active in enumerate(active):
+        if is_active and start is None:
+            start = i
+        elif not is_active and start is not None:
+            runs.append((start, i - 1))
+            start = None
+    if start is not None:
+        runs.append((start, len(active) - 1))
+
+    long_runs = [run for run in runs if (run[1] - run[0] + 1) >= min_active_run_frames]
+    if not long_runs:
+        return arr, 0.0, 0.0
+
+    first, _ = long_runs[0]
+    _, last = long_runs[-1]
+
+    pad_frames = max(1, int(round(0.03 / frame_s)))
+    first = max(0, first - pad_frames)
+    last = min(len(active) - 1, last + pad_frames)
+
+    start_i = max(0, first * frame_len)
+    end_i = min(n_samples, (last + 1) * frame_len)
+    if end_i - start_i <= 0:
+        return arr, 0.0, 0.0
+
+    if arr.ndim == 1:
+        trimmed = arr[start_i:end_i]
+    else:
+        trimmed = arr[start_i:end_i, :]
+
+    start_trim_s = float(start_i) / float(sr)
+    end_trim_s = float(max(0, n_samples - end_i)) / float(sr)
+    return trimmed, start_trim_s, end_trim_s
+
+
 def load_audio(file_path: Path, mono: bool = False) -> tuple[np.ndarray, int]:
     y, sr = librosa.load(path=str(file_path), sr=None, mono=mono)
 
@@ -269,6 +342,18 @@ def split_audio_file(
     cfg: SegmentationConfig,
 ) -> SplitOutput:
     audio, sr = load_audio(file_path)
+    audio, start_trim_s, end_trim_s = _trim_input_edge_silence(
+        audio=audio,
+        sr=sr,
+        threshold_db=cfg.trim_silence_db_threshold,
+    )
+    if start_trim_s > 0.0 or end_trim_s > 0.0:
+        print(
+            "Input edge trim applied "
+            f"(start={start_trim_s:.2f}s, end={end_trim_s:.2f}s, "
+            f"threshold={cfg.trim_silence_db_threshold:.1f}dB)."
+        )
+
     duration_s = float(audio.shape[0]) / float(sr)
     export_info = _discogs_export_info_from_filename_stem(file_path.stem)
     expected_count = export_info.expected_count
@@ -299,6 +384,7 @@ def split_audio_file(
         base_name=base_name,
         track_metadata=track_metadata,
         export_settings=export_settings,
+        trim_silence_db_threshold=cfg.trim_silence_db_threshold,
     )
     return SplitOutput(
         segmentation=seg,

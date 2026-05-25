@@ -23,6 +23,7 @@ class SegmentationConfig:
     weight_spectral_novelty: float = 0.25
     music_low_hz: float = 120.0
     music_high_hz: float = 5000.0
+    trim_silence_db_threshold: float = -52.0
 
 
 @dataclass

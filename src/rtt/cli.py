@@ -33,6 +33,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=5000.0,
         help="High frequency bound for music-only silence analysis.",
     )
+    parser.add_argument(
+        "--trim-silence-db",
+        type=float,
+        default=-52.0,
+        help="Trim threshold in dB for start/end silence of each exported track.",
+    )
     return parser
 
 
@@ -45,6 +51,7 @@ def main() -> None:
         silence_min_len_s=args.silence_min,
         music_low_hz=args.music_low_hz,
         music_high_hz=args.music_high_hz,
+        trim_silence_db_threshold=args.trim_silence_db,
     )
 
     result = split_audio_file(file_path=args.input, output_dir=args.output, cfg=cfg)
