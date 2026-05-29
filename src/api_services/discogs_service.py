@@ -313,11 +313,11 @@ def get_release_info_by_record_ref(
         position = _safe(track.position)
         side = _extract_side(position)
         title = _safe(track.title)
-        if not side or not title:
+        if not title:
             continue
         tracks.append(
             DiscogsReleaseTrack(
-                side=side,
+                side=side or "",
                 position=position or "",
                 title=title,
                 duration=_safe(track.duration),

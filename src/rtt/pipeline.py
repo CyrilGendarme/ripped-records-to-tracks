@@ -13,6 +13,7 @@ from .exporter import (
     infer_export_settings,
 )
 from .naming import build_export_base_name
+from .naming import extract_rpm_label
 from .naming import parse_recording_name
 from .segmentation import (
     SegmentationConfig,
@@ -37,12 +38,20 @@ class DiscogsExportInfo:
     artist: Optional[str] = None
     album: Optional[str] = None
     record_ref: Optional[str] = None
+    rpm_label: Optional[str] = None
 
 
 def _discogs_export_info_from_filename_stem(stem: str) -> DiscogsExportInfo:
     parsed = parse_recording_name(stem)
+    rpm_label = extract_rpm_label(stem)
     if not parsed:
-        return DiscogsExportInfo()
+        return DiscogsExportInfo(rpm_label=rpm_label)
+    if not parsed.record_ref:
+        return DiscogsExportInfo(
+            artist=parsed.artist,
+            album=parsed.track,
+            rpm_label=rpm_label,
+        )
 
     try:
         from src.api_services.discogs_service import get_release_info_by_record_ref
@@ -51,6 +60,7 @@ def _discogs_export_info_from_filename_stem(stem: str) -> DiscogsExportInfo:
             artist=parsed.artist,
             album=parsed.track,
             record_ref=parsed.record_ref,
+            rpm_label=rpm_label,
         )
 
     try:
@@ -63,6 +73,7 @@ def _discogs_export_info_from_filename_stem(stem: str) -> DiscogsExportInfo:
                 artist=parsed.artist,
                 album=parsed.track,
                 record_ref=parsed.record_ref,
+                rpm_label=rpm_label,
             )
 
         tracks = release_info.tracks
@@ -76,6 +87,7 @@ def _discogs_export_info_from_filename_stem(stem: str) -> DiscogsExportInfo:
             artist=parsed.artist,
             album=parsed.track,
             record_ref=parsed.record_ref,
+            rpm_label=rpm_label,
         )
 
     side_hint = (parsed.side or "").strip().upper()[:1]
@@ -84,14 +96,44 @@ def _discogs_export_info_from_filename_stem(stem: str) -> DiscogsExportInfo:
         side_tracks = [track for track in tracks if track.side == side_hint]
         if side_tracks:
             selected_tracks = side_tracks
+        else:
+            # Some Discogs releases expose positions as 1..N without side letters.
+            # For side-rip inputs (A/B), infer halves from sequential numeric positions.
+            numeric_positions: List[int] = []
+            for track in tracks:
+                pos = (track.position or "").strip()
+                if not pos.isdigit():
+                    numeric_positions = []
+                    break
+                numeric_positions.append(int(pos))
+
+            if (
+                side_hint in {"A", "B"}
+                and numeric_positions
+                and len(numeric_positions) == len(tracks)
+            ):
+                ordered = sorted(
+                    zip(numeric_positions, tracks), key=lambda item: item[0]
+                )
+                expected = list(range(1, len(tracks) + 1))
+                if [p for p, _ in ordered] == expected and len(ordered) % 2 == 0:
+                    midpoint = len(ordered) // 2
+                    if side_hint == "A":
+                        selected_tracks = [track for _, track in ordered[:midpoint]]
+                    else:
+                        selected_tracks = [track for _, track in ordered[midpoint:]]
 
     return DiscogsExportInfo(
-        display_tracks=[f"{track.side} - {track.title}" for track in selected_tracks],
+        display_tracks=[
+            f"{(track.side or track.position or '?')} - {track.title}"
+            for track in selected_tracks
+        ],
         track_titles=[track.title for track in selected_tracks],
         expected_count=len(selected_tracks) if selected_tracks else None,
         artist=release_info.artist or parsed.artist,
         album=release_info.album or parsed.track,
         record_ref=release_info.record_ref or parsed.record_ref,
+        rpm_label=rpm_label,
     )
 
 
@@ -107,6 +149,8 @@ def _build_track_metadata(
             if idx < len(export_info.track_titles)
             else f"Track {idx + 1:02d}"
         )
+        if export_info.rpm_label and not title.endswith(export_info.rpm_label):
+            title = f"{title} {export_info.rpm_label}"
         metadata.append(
             TrackExportMetadata(
                 artist=export_info.artist,
